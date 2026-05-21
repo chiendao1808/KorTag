@@ -1,0 +1,8 @@
+.idea
+.venv
+output
+processed
+unprocessed
+untagged
+tagged
+*.json
