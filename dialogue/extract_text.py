@@ -10,17 +10,16 @@ import sys
 import argparse
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
-from konlpy.tag import Kkma
+from konlpy.tag import Komoran
 
 keywords: Optional[List[str]] = None
 raw_text_field_name = "raw_text"
 tagged_text_field_name = "tagged_text"
-kkma: Kkma = Kkma(max_heap_size=2048)
-max_time_kkma_pos = 0
+komoran: Komoran = Komoran(max_heap_size=2048)
+max_time_komoran_pos = 0
 
 
 def clean_utf8(value: bytes | str) -> str:
@@ -58,6 +57,34 @@ def json_to_jsonl(json_file: str, jsonl_file: str) -> int:
     return len(documents)
 
 
+def merge_incomplete_utterances(utterances: List[dict]) -> List[dict]:
+    merged_utterances = []
+    forms = []
+    speaker_ids = []
+
+    for utterance in utterances:
+        forms.append(utterance.get("form", ""))
+        speaker_ids.append(str(utterance.get("speaker_id", "")))
+        merged_form = " ".join(forms)
+        clean_merged_form = re.sub(r'<[^>]+>', '', merged_form).rstrip()
+
+        if clean_merged_form.endswith((".", "?", "!")):
+            merged_utterances.append({
+                "form": merged_form,
+                "speaker_id": ",".join(speaker_ids),
+            })
+            forms = []
+            speaker_ids = []
+
+    if forms:
+        merged_utterances.append({
+            "form": " ".join(forms),
+            "speaker_id": ",".join(speaker_ids),
+        })
+
+    return merged_utterances
+
+
 #
 def extract_text_from_sentence(sentence):
     para_result = {
@@ -73,11 +100,11 @@ def extract_text_from_sentence(sentence):
     # Kiểm tra keyword
     try:
         start_time = time.time() * 1000
-        tagged_list = kkma.pos(clean_text)
+        tagged_list = komoran.pos(clean_text)
         total_time = time.time() * 1000 - start_time
-        global max_time_kkma_pos
-        if total_time > max_time_kkma_pos:
-            max_time_kkma_pos = total_time
+        global max_time_komoran_pos
+        if total_time > max_time_komoran_pos:
+            max_time_komoran_pos = total_time
     except Exception as error:
         print(f"text error {error}:\n {clean_text}")
         tagged_list = []
@@ -104,7 +131,7 @@ def extract_text_from_document(doc: dict):
     """
     total_tagged_texts = []
     total_raw_texts = []
-    paragraphs = doc.get('utterance', [])
+    paragraphs = merge_incomplete_utterances(doc.get('utterance', []))
     for i in range(len(paragraphs)):
         paragraphs[i]["idx"] = i
 
@@ -116,18 +143,11 @@ def extract_text_from_document(doc: dict):
         sentence_result = extract_text_from_sentence(sentence)
         if sentence_result.get('match'):
             print('matched: ', sentence_result.get(tagged_text_field_name))
-            pre_sentence_str = pre_sentence.get('form', '') if pre_sentence else ''
-            next_sentence_str = next_sentence.get('form', '') if next_sentence else ''
             matched_tagged_text = sentence_result.get(tagged_text_field_name)
             match_raw_text = sentence_result.get(raw_text_field_name)
-            final_tagged_text = (f"Previous sentence:{pre_sentence_str}\n"
-                                 f"speaker_id:{sentence.get('speaker_id')}:{matched_tagged_text} \n"
-                                 f"Next sentence:{next_sentence_str}")
+            final_tagged_text = f"speaker_id:{sentence.get('speaker_id')}:{matched_tagged_text} \n"
             # form
-            final_raw_text = (f"speaker_id-{sentence.get('speaker_id')} \n"
-                              f"{pre_sentence_str + '.' if not pre_sentence_str.endswith('.') else pre_sentence_str} "
-                              f"{sentence_result.get(raw_text_field_name)} "
-                              f"{next_sentence_str + '.' if not next_sentence_str.endswith('.') else next_sentence_str}")
+            final_raw_text = f"speaker_id:{sentence.get('speaker_id')}:{match_raw_text} \n"
             total_tagged_texts.append(final_tagged_text + "\n\n")
             total_raw_texts.append(final_raw_text + "\n\n")
     return total_tagged_texts, total_raw_texts
@@ -302,7 +322,7 @@ Examples:
         # Xử lý tất cả file trong thư mục
         process_directory(args.input_dir, args.output_dir, args.prefixes, args.keep_jsonl)
 
-    print(f"max_pos_kkma_time is {max_time_kkma_pos}ms")
+    print(f"max_pos_komoran_time is {max_time_komoran_pos}ms")
     print("=" * 60)
     print("All done!")
     print("=" * 60)
